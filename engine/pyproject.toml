@@ -1,0 +1,35 @@
+[project]
+name = "engine"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "Dare Goodness",email = "daregoodness@gmail.com"}
+]
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "scipy (>=1.18.1,<2.0.0)",
+    "pytest (>=9.1.1,<10.0.0)",
+    "pandas (>=3.0.6,<4.0.0)",
+    "sympy (>=1.14.0,<2.0.0)",
+    "matplotlib (>=3.11.2,<4.0.0)",
+    "fastapi (>=0.115.0,<1.0.0)",
+    "uvicorn[standard] (>=0.32.0,<1.0.0)",
+    "websockets (>=13.0,<15.0)",
+    "pydantic (>=2.9.0,<3.0.0)",
+    "pyyaml (>=6.0.0,<7.0.0)",
+]
+
+[tool.poetry]
+packages = [{include = "packages", from = "src"}]
+
+[tool.poetry.scripts]
+start = "packages.cli.base:main"
+jint = "packages.cli.jint:main"
+ras = "packages.cli.ras:main"
+server = "server.main:run"
+snakeboard-server = "server.snakeboard:run"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
