@@ -150,9 +150,11 @@ def _run_analyses(
                 if lyapunov_transient is None
                 else lyapunov_transient
             )
+            probe = robot_factory()
+            y0_l = np.zeros(probe.y.size)
             result = lyapunov_exponents(
-                robot_factory(),
-                np.zeros(32),
+                probe,
+                y0_l,
                 lyapunov_duration,
                 lyapunov_dt,
                 transient=transient,

@@ -134,10 +134,12 @@ def lyapunov_exponents(
 
     The tangent dynamics use a frozen-Jacobian matrix exponential per step,
     which keeps the stiff RAS modes stable during the variational update.  The
-    full 32-state spectrum is propagated and returned in `exponents`, while each
-    mode is also attributed to the physical body carrying most of its
-    tangent-vector energy (available as `body_exponents`).  The Kaplan-Yorke
-    dimension and classification use the full spectrum.
+    full spectrum is propagated; for the 32-state snakeboard each mode is
+    attributed to the physical body carrying most of its tangent-vector energy
+    (available as ``body_exponents``).  For lower-dimensional systems (e.g.
+    Lorenz, Rossler) each mode is its own group and ``body_exponents`` equals
+    the full spectrum.  The Kaplan-Yorke dimension and classification use the
+    full spectrum.
     """
     if duration <= 0.0:
         raise ValueError("duration must be positive")
@@ -155,11 +157,16 @@ def lyapunov_exponents(
         t = 0.0
 
     n = y.size
-    if n != 32:
-        raise ValueError("Lyapunov analysis expects the 32-state snakeboard")
+    if n <= 0:
+        raise ValueError("Lyapunov analysis expects a non-empty state vector")
 
-    bodies = tuple(BODY_GROUPS)
-    groups = {name: _body_indices(members) for name, members in BODY_GROUPS.items()}
+    is_snakeboard = n == 32
+    if is_snakeboard:
+        bodies = tuple(BODY_GROUPS)
+        groups = {name: _body_indices(members) for name, members in BODY_GROUPS.items()}
+    else:
+        bodies = tuple(f"mode_{i}" for i in range(n))
+        groups = {bodies[i]: np.array([i], dtype=int) for i in range(n)}
 
     nsteps = max(1, int(np.floor(duration / dt + 1e-12)))
     tangent_vectors = np.eye(n)
@@ -278,7 +285,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Lyapunov exponents and fractal classification for the snakeboard"
     )
-    parser.add_argument("--model", choices=("JINT", "RAS"), default="JINT")
+    parser.add_argument("--model", choices=("JINT", "RAS", "LORENZ", "ROSSLER"), default="JINT")
     parser.add_argument("--duration", type=float, default=20.0)
     parser.add_argument("--dt", type=float, default=0.02)
     parser.add_argument("--transient", type=float, default=None)
@@ -300,9 +307,13 @@ def main(argv=None):
     transient = 0.5 * args.duration if args.transient is None else args.transient
 
     robot = build_robot(args.model, **overrides)
+    if args.model.upper() in ("JINT", "RAS"):
+        y0_l = np.zeros(32)
+    else:
+        y0_l = np.array([1.0, 1.0, 1.0])
     result = lyapunov_exponents(
         robot,
-        np.zeros(32),
+        y0_l,
         args.duration,
         args.dt,
         transient=transient,

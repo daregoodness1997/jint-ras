@@ -17,7 +17,7 @@ from packages.sim import model_plant
 def _parse_args(argv=None):
     ap = argparse.ArgumentParser(description="Optimize the snakeboard gait (JINT/RAS)")
     ap.add_argument(
-        "--model", choices=("JINT", "RAS"), default="JINT", help="snakeboard model"
+        "--model", choices=("JINT", "RAS", "LORENZ", "ROSSLER"), default="JINT", help="snakeboard model or chaotic system"
     )
     ap.add_argument(
         "--controller",
@@ -27,6 +27,12 @@ def _parse_args(argv=None):
     )
     ap.add_argument("--duration", type=float, default=6.0, help="rollout length [s]")
     ap.add_argument("--f-sim", type=float, default=500.0, help="sim rate [Hz]")
+    ap.add_argument(
+        "--dt",
+        type=float,
+        default=None,
+        help="override simulation step [s] (defaults to 1/f-sim)",
+    )
     ap.add_argument(
         "--plot-samples",
         type=int,
@@ -58,6 +64,12 @@ def _parse_args(argv=None):
         type=float,
         default=None,
         help="discard this many seconds before sectioning",
+    )
+    ap.add_argument(
+        "--poincare-nsub",
+        type=int,
+        default=4,
+        help="substeps per dt for Poincare integration",
     )
     ap.add_argument(
         "--lyapunov",
@@ -115,7 +127,7 @@ def _default_gait(model):
     return params.A_deg, params.f, params.rho_deg_s
 
 
-def _cache_path(args, gait):
+def _cache_path(args, gait, dt=None):
     A_deg, f, rho_deg_s = gait
     cache_dir = os.environ.get("SNAKEBOARD_CACHE_DIR")
     root = (
@@ -125,7 +137,9 @@ def _cache_path(args, gait):
     )
     name = (
         f"{args.model}_{args.controller}_A{A_deg:g}_f{f:g}_rho{rho_deg_s:g}"
-        f"_dur{args.duration:g}_fsim{args.f_sim:g}.npz"
+        f"_dur{args.duration:g}_fsim{args.f_sim:g}"
+        + (f"_dt{dt:g}" if dt is not None else "")
+        + ".npz"
     )
     return root / name
 
@@ -204,7 +218,7 @@ def run(argv=None):
     f = args.f if args.f is not None else default_f
     rho_deg_s = args.rho_deg_s if args.rho_deg_s is not None else default_rho
     gait = (A_deg, f, rho_deg_s)
-    cache_path = _cache_path(args, gait)
+    cache_path = _cache_path(args, gait, dt=args.dt)
 
     if cache_path.exists():
         rows = _load_cached(cache_path)
@@ -215,10 +229,11 @@ def run(argv=None):
             f"A={A_deg:g} deg, f={f:g} Hz, rho={rho_deg_s:g} deg/s"
         )
         plant = plant_factory(A_deg, f, rho_deg_s)
-        rows = plant.simulate(args.duration, args.f_sim)
+        rows = plant.simulate(args.duration, args.f_sim, dt=args.dt)
         _save_cached(cache_path, rows, args, gait)
         print(
-            f"Simulated {len(rows)} samples ({args.duration:g} s at {args.f_sim:g} Hz); "
+            f"Simulated {len(rows)} samples ({args.duration:g} s at "
+            f"{args.f_sim:g} Hz" + (f", dt={args.dt:g}" if args.dt else "") + "); "
             f"saved to {cache_path}"
         )
 
@@ -237,13 +252,18 @@ def run(argv=None):
                 f=f,
                 rho_deg_s=rho_deg_s,
             )
+            if args.model.upper() in ("JINT", "RAS"):
+                y0_p = np.zeros(32)
+            else:
+                y0_p = np.array([1.0, 1.0, 1.0])
             poincare_analysis = analyze_poincare(
                 robot,
-                np.zeros(32),
+                y0_p,
                 args.poincare_duration,
                 1.0 / args.f_sim,
                 theta=args.poincare_theta,
                 transient=transient,
+                nsub=args.poincare_nsub,
             )
             print(f"Poincare fixed point: {poincare_analysis.fixed_point:.6f}")
         except ValueError as exc:
@@ -264,9 +284,13 @@ def run(argv=None):
                 f=f,
                 rho_deg_s=rho_deg_s,
             )
+            if args.model.upper() in ("JINT", "RAS"):
+                y0_l = np.zeros(32)
+            else:
+                y0_l = np.array([1.0, 1.0, 1.0])
             lyapunov_result = lyapunov_exponents(
                 robot,
-                np.zeros(32),
+                y0_l,
                 args.lyapunov_duration,
                 args.lyapunov_dt,
                 transient=transient,

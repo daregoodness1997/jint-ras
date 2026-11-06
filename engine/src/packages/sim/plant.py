@@ -6,6 +6,7 @@ import numpy as np
 
 from packages.control import PDController, make_controller
 from packages.core.params import Params, jint_params, ras_params
+from packages.models.chaotic import ChaoticParams, LorenzRobot, RosslerRobot
 from packages.models.jint import JRobot
 from packages.models.ras import RRobot
 
@@ -18,8 +19,10 @@ class Plant:
     def p(self) -> Params:
         return self.robot.params
 
-    def simulate(self, duration: float, f_sim: float) -> np.ndarray:
-        return self.robot.simulate_rows(duration, f_sim)
+    def simulate(
+        self, duration: float, f_sim: float, dt: float | None = None
+    ) -> np.ndarray:
+        return self.robot.simulate_rows(duration, f_sim, dt=dt)
 
 
 def _make_controller(controller, controller_cls, params):
@@ -28,6 +31,24 @@ def _make_controller(controller, controller_cls, params):
     if controller is not None:
         return controller
     return (controller_cls or PDController)(params)
+
+
+def _make_chaotic_plant(model: str, controller=None, **overrides):
+    if model.upper() == "LORENZ":
+        def plant(A_deg: float, f: float, rho_deg_s: float) -> Plant:
+            params = ChaoticParams(model="LORENZ", **overrides)
+            robot = LorenzRobot(controller=controller, params=params)
+            return Plant(robot)
+        return plant
+
+    if model.upper() == "ROSSLER":
+        def plant(A_deg: float, f: float, rho_deg_s: float) -> Plant:
+            params = ChaoticParams(model="ROSSLER", **overrides)
+            robot = RosslerRobot(controller=controller, params=params)
+            return Plant(robot)
+        return plant
+
+    raise ValueError(f"unknown chaotic model {model!r}")
 
 
 def create_plant(model: str = "JINT", controller_cls=None, controller=None, **overrides):
@@ -48,7 +69,15 @@ def create_plant(model: str = "JINT", controller_cls=None, controller=None, **ov
             return Plant(robot)
         return plant
 
-    raise ValueError(f"unknown model {model!r}; expected 'JINT' or 'RAS'")
+    if model == "LORENZ":
+        return _make_chaotic_plant("LORENZ", controller=controller, **overrides)
+
+    if model == "ROSSLER":
+        return _make_chaotic_plant("ROSSLER", controller=controller, **overrides)
+
+    raise ValueError(
+        f"unknown model {model!r}; expected 'JINT', 'RAS', 'LORENZ', or 'ROSSLER'"
+    )
 
 
 model_plant = create_plant

@@ -30,6 +30,12 @@ def rotor_phase_state(y: np.ndarray) -> np.ndarray:
     return np.array([y[O3_IDX], y[DO3_IDX], 0.0], dtype=float)
 
 
+def chaotic_phase_state(y: np.ndarray) -> np.ndarray:
+    """Map a low-dimensional chaotic state to phase coordinates (x, y, 0)."""
+    y = np.asarray(y, dtype=float)
+    return np.array([y[0], y[1], 0.0], dtype=float)
+
+
 def section_template(theta: float = -np.pi / 2.0) -> tuple[np.ndarray, np.ndarray]:
     """Return the section template and normal vectors."""
     e_x = np.array([1.0, 0.0, 0.0])
@@ -75,11 +81,14 @@ def simulate(
     nsteps = max(0, int(np.floor((float(tf) - t) / float(dt) + 1e-12)))
     times = [t]
     states = [y.copy()]
-    for _ in range(nsteps):
+    print(f"Integrating {nsteps} steps ({tf:g} s at dt={dt:g}, nsub={nsub})")
+    for i in range(nsteps):
         y = flow(robot, y, t, dt, nsub=nsub)
         t += dt
         times.append(t)
         states.append(y.copy())
+        if (i + 1) % 10000 == 0:
+            print(f"  step {i + 1}/{nsteps} (t={t:.3f} s)")
     return np.asarray(times, dtype=float), np.asarray(states, dtype=float)
 
 
@@ -259,12 +268,16 @@ def analyze_poincare(
     t0: float = 0.0,
     nsub: int = 4,
     theta: float = -np.pi / 2.0,
-    state_fn: SectionState = rotor_phase_state,
+    state_fn: SectionState | None = None,
     direction: str = "increasing",
     transient: float = 0.0,
     guess: float | None = None,
 ) -> PoincareAnalysis:
     """Run the full Poincare-section and return-map analysis."""
+    if state_fn is None:
+        state_fn = (
+            chaotic_phase_state if np.asarray(y0).size != 32 else rotor_phase_state
+        )
     times, states = simulate(robot, y0, tf, dt, t0=t0, nsub=nsub)
     crossings = find_crossings(
         robot,
@@ -296,47 +309,87 @@ def analyze_poincare(
 def plot_analysis(
     analysis: PoincareAnalysis,
     theta: float = -np.pi / 2.0,
-    state_fn: SectionState = rotor_phase_state,
+    state_fn: SectionState | None = None,
     show: bool = True,
 ):
-    """Plot the rotor phase portrait and the return map."""
+    """Plot the phase portrait and the return map.
+
+    For 3-D chaotic systems (Lorenz/Rossler) the left panel shows a 3-D
+    trajectory; for the 32-D snakeboard it shows the rotor phase portrait.
+    """
     import matplotlib.pyplot as plt
 
-    template, _ = section_template(theta)
-    phase = np.asarray([state_fn(s)[:2] for s in analysis.states])
-    section_phase = np.asarray([state_fn(s)[:2] for s in analysis.crossings])
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    is_chaotic = analysis.states.shape[1] != 32
+    if state_fn is None:
+        state_fn = chaotic_phase_state if is_chaotic else rotor_phase_state
 
-    ax = axes[0]
-    ax.plot(phase[:, 0], phase[:, 1], color="C0", linewidth=0.8, label="trajectory")
-    ax.plot(
-        section_phase[:, 0],
-        section_phase[:, 1],
-        "o",
-        color="C3",
-        markersize=4,
-        label="section",
-    )
-    direction = template[:2]
-    norm = np.linalg.norm(direction)
-    if norm > 0.0:
-        direction = direction / norm
-        span = max(float(np.max(np.abs(phase))), 1.0) * 1.1
-        ax.plot(
-            [-span * direction[0], span * direction[0]],
-            [-span * direction[1], span * direction[1]],
-            "k--",
-            linewidth=1.0,
-            label="section line",
+    if is_chaotic:
+        fig = plt.figure(figsize=(12, 5))
+        ax3d = fig.add_subplot(1, 2, 1, projection="3d")
+        states = np.asarray(analysis.states, dtype=float)
+        ax3d.plot(
+            states[:, 0],
+            states[:, 1],
+            states[:, 2],
+            color="C0",
+            linewidth=0.8,
+            label="trajectory",
         )
-    ax.set_xlabel(r"$O_3$ [rad]")
-    ax.set_ylabel(r"$\dot{O}_3$ [rad/s]")
-    ax.set_title("Rotor phase portrait")
-    ax.grid(True, alpha=0.3)
-    ax.legend()
+        if len(analysis.crossings) > 0:
+            crossings = np.asarray(analysis.crossings, dtype=float)
+            ax3d.scatter(
+                crossings[:, 0],
+                crossings[:, 1],
+                crossings[:, 2],
+                color="C3",
+                s=20,
+                label="section",
+            )
+        ax3d.set_xlabel("x")
+        ax3d.set_ylabel("y")
+        ax3d.set_zlabel("z")
+        ax3d.set_title("3-D phase portrait")
+        ax3d.grid(True, alpha=0.3)
+        ax3d.legend(fontsize="x-small")
 
-    ax = axes[1]
-    ax.plot(
+        ax_rm = fig.add_subplot(1, 2, 2)
+    else:
+        template, _ = section_template(theta)
+        phase = np.asarray([state_fn(s)[:2] for s in analysis.states])
+        section_phase = np.asarray([state_fn(s)[:2] for s in analysis.crossings])
+        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+        ax = axes[0]
+        ax.plot(phase[:, 0], phase[:, 1], color="C0", linewidth=0.8, label="trajectory")
+        ax.plot(
+            section_phase[:, 0],
+            section_phase[:, 1],
+            "o",
+            color="C3",
+            markersize=4,
+            label="section",
+        )
+        direction = template[:2]
+        norm = np.linalg.norm(direction)
+        if norm > 0.0:
+            direction = direction / norm
+            span = max(float(np.max(np.abs(phase))), 1.0) * 1.1
+            ax.plot(
+                [-span * direction[0], span * direction[0]],
+                [-span * direction[1], span * direction[1]],
+                "k--",
+                linewidth=1.0,
+                label="section line",
+            )
+        ax.set_xlabel(r"$O_3$ [rad]")
+        ax.set_ylabel(r"$\dot{O}_3$ [rad/s]")
+        ax.set_title("Rotor phase portrait")
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+
+        ax_rm = axes[1]
+
+    ax_rm.plot(
         analysis.radii1,
         analysis.radii2,
         ".",
@@ -352,30 +405,30 @@ def plot_analysis(
     span = hi - lo
     rn = np.linspace(lo - 0.05 * span, hi + 0.05 * span, 200)
     if analysis.spline is not None:
-        ax.plot(rn, splev(rn, analysis.spline), color="C0", label="spline")
+        ax_rm.plot(rn, splev(rn, analysis.spline), color="C0", label="spline")
     else:
-        ax.axhline(analysis.fixed_point, color="C0", label="spline")
-    ax.plot(rn, rn, "k--", linewidth=1.0, label=r"$r_{n+1}=r_n$")
-    ax.axvline(
+        ax_rm.axhline(analysis.fixed_point, color="C0", label="spline")
+    ax_rm.plot(rn, rn, "k--", linewidth=1.0, label=r"$r_{n+1}=r_n$")
+    ax_rm.axvline(
         analysis.fixed_point,
         color="C2",
         linestyle=":",
         label=f"fixed = {analysis.fixed_point:.6f}",
     )
-    ax.set_xlabel(r"$r_n$")
-    ax.set_ylabel(r"$r_{n+1}$")
-    ax.set_title("Return map")
-    ax.grid(True, alpha=0.3)
-    ax.legend()
+    ax_rm.set_xlabel(r"$r_n$")
+    ax_rm.set_ylabel(r"$r_{n+1}$")
+    ax_rm.set_title("Return map")
+    ax_rm.grid(True, alpha=0.3)
+    ax_rm.legend()
 
     fig.tight_layout()
     if show:
         plt.show()
-    return fig, axes
+    return fig, ax_rm
 
 
 def build_robot(model: str = "JINT", controller=None, **overrides):
-    """Build a JINT or RAS snakeboard with optional parameter overrides."""
+    """Build a JINT/RAS snakeboard or a chaotic system (Lorenz/Rossler)."""
     model = model.upper()
     if model == "JINT":
         from packages.core.params import jint_params
@@ -389,8 +442,20 @@ def build_robot(model: str = "JINT", controller=None, **overrides):
 
         params = ras_params(**overrides)
         robot_cls = RRobot
+    elif model == "LORENZ":
+        from packages.models.chaotic import ChaoticParams, LorenzRobot
+
+        params = ChaoticParams(model="LORENZ", **overrides)
+        return LorenzRobot(controller=controller, params=params)
+    elif model == "ROSSLER":
+        from packages.models.chaotic import ChaoticParams, RosslerRobot
+
+        params = ChaoticParams(model="ROSSLER", **overrides)
+        return RosslerRobot(controller=controller, params=params)
     else:
-        raise ValueError(f"unknown model {model!r}; expected 'JINT' or 'RAS'")
+        raise ValueError(
+            f"unknown model {model!r}; expected 'JINT', 'RAS', 'LORENZ', or 'ROSSLER'"
+        )
 
     if isinstance(controller, str):
         from packages.control import make_controller
@@ -405,7 +470,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Poincare section and return map for the snakeboard rotor"
     )
-    parser.add_argument("--model", choices=("JINT", "RAS"), default="JINT")
+    parser.add_argument("--model", choices=("JINT", "RAS", "LORENZ", "ROSSLER"), default="JINT")
     parser.add_argument("--duration", type=float, default=20.0)
     parser.add_argument("--dt", type=float, default=1.0 / 500.0)
     parser.add_argument("--theta", type=float, default=-np.pi / 2.0)
@@ -428,9 +493,13 @@ def main(argv=None):
 
     robot = build_robot(args.model, **overrides)
     try:
+        if args.model.upper() in ("JINT", "RAS"):
+            y0_p = np.zeros(32)
+        else:
+            y0_p = np.array([1.0, 1.0, 1.0])
         analysis = analyze_poincare(
             robot,
-            np.zeros(32),
+            y0_p,
             args.duration,
             args.dt,
             theta=args.theta,
