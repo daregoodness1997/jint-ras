@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
-from scipy.linalg import expm
 
 from packages.dynamics.poincare import build_robot, flow, simulate
 
@@ -91,7 +90,9 @@ def classify_fractal_behavior(
     dimension: float,
 ) -> str:
     """Classify the attractor from the rounded Lyapunov spectrum."""
-    rounded_exponents = np.round(np.asarray(lyapunov_exponents, dtype=float), decimals=1)
+    rounded_exponents = np.round(
+        np.asarray(lyapunov_exponents, dtype=float), decimals=1
+    )
     positive_count = int(np.sum(rounded_exponents > 0.01))
     zero_count = int(np.sum((rounded_exponents >= -0.01) & (rounded_exponents <= 0.01)))
     negative_count = int(np.sum(rounded_exponents < -0.01))
@@ -132,9 +133,15 @@ def lyapunov_exponents(
 ) -> LyapunovResult:
     """Compute the Lyapunov spectrum with continuous QR reorthonormalization.
 
-    The tangent dynamics use a frozen-Jacobian matrix exponential per step,
-    which keeps the stiff RAS modes stable during the variational update.  The
-    full spectrum is propagated; for the 32-state snakeboard each mode is
+    Follows the reference implementation:
+      1. Integrate a transient to let the system settle onto the attractor.
+      2. Use the final transient state as the initial condition for the
+         Lyapunov computation.
+      3. Propagate tangent vectors with a forward-Euler step
+         V <- V + dt * (J @ V), then QR reorthonormalize each step.
+      4. Accumulate log|diag(R)| and divide by total compute time at the end.
+
+    The full spectrum is propagated; for the 32-state snakeboard each mode is
     attributed to the physical body carrying most of its tangent-vector energy
     (available as ``body_exponents``).  For lower-dimensional systems (e.g.
     Lorenz, Rossler) each mode is its own group and ``body_exponents`` equals
@@ -146,15 +153,16 @@ def lyapunov_exponents(
     if dt <= 0.0:
         raise ValueError("dt must be positive")
 
+    # --- Transient integration: settle onto the attractor ------------------
     if transient > 0.0:
         transient_times, transient_states = simulate(
             robot, y0, transient, dt, nsub=nsub
         )
         y = transient_states[-1].copy()
-        t = float(transient_times[-1])
+        t0 = float(transient_times[-1])
     else:
         y = np.asarray(y0, dtype=float).copy()
-        t = 0.0
+        t0 = 0.0
 
     n = y.size
     if n <= 0:
@@ -168,6 +176,11 @@ def lyapunov_exponents(
         bodies = tuple(f"mode_{i}" for i in range(n))
         groups = {bodies[i]: np.array([i], dtype=int) for i in range(n)}
 
+    def jacobian_fn(state: np.ndarray) -> np.ndarray:
+        """Numerical Jacobian of the robot vector field at (t, state)."""
+        return numerical_jacobian(robot, t0, state, eps=eps)
+
+    # --- Lyapunov computation phase ---------------------------------------
     nsteps = max(1, int(np.floor(duration / dt + 1e-12)))
     tangent_vectors = np.eye(n)
     lyapunov_sums = np.zeros(n)
@@ -176,8 +189,9 @@ def lyapunov_exponents(
     times = np.zeros(nsteps)
 
     for i in range(nsteps):
-        jacobian = numerical_jacobian(robot, t, y, eps=eps)
-        tangent_vectors = expm(jacobian * dt) @ tangent_vectors
+        jacobian = jacobian_fn(y)
+        # Forward-Euler tangent update: V <- V + dt * (J @ V)
+        tangent_vectors = tangent_vectors + dt * (jacobian @ tangent_vectors)
         q, r = np.linalg.qr(tangent_vectors)
         tangent_vectors = q
         diagonal = np.abs(np.diag(r))
@@ -192,11 +206,11 @@ def lyapunov_exponents(
                     np.max(lyapunov_sums[mask]) / elapsed * LOG2_E
                 )
         full_over_time[i, :] = lyapunov_sums / elapsed * LOG2_E
-        times[i] = t + dt
-        y = flow(robot, y, t, dt, nsub=nsub)
-        t += dt
+        times[i] = t0 + elapsed
+        y = flow(robot, y, t0 + i * dt, dt, nsub=nsub)
 
-    full_exponents = lyapunov_sums / (nsteps * dt) * LOG2_E
+    total_time = nsteps * dt
+    full_exponents = lyapunov_sums / total_time * LOG2_E
     owners = _mode_owners(tangent_vectors, groups)
     body_exponents = np.zeros(len(bodies))
     for g in range(len(bodies)):
@@ -227,7 +241,10 @@ def plot_lyapunov(result: LyapunovResult, show: bool = True):
     import matplotlib.pyplot as plt
 
     fig, axes = plt.subplots(
-        2, 1, figsize=(10, 9), sharex=True,
+        2,
+        1,
+        figsize=(10, 9),
+        sharex=True,
         gridspec_kw={"height_ratios": [1, 2]},
     )
 
@@ -285,7 +302,9 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Lyapunov exponents and fractal classification for the snakeboard"
     )
-    parser.add_argument("--model", choices=("JINT", "RAS", "LORENZ", "ROSSLER"), default="JINT")
+    parser.add_argument(
+        "--model", choices=("JINT", "RAS", "LORENZ", "ROSSLER"), default="JINT"
+    )
     parser.add_argument("--duration", type=float, default=20.0)
     parser.add_argument("--dt", type=float, default=0.02)
     parser.add_argument("--transient", type=float, default=None)

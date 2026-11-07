@@ -102,7 +102,11 @@ def find_crossings(
     transient: float = 0.0,
     nsub: int = 4,
 ) -> np.ndarray:
-    """Refine all transversal section crossings in an integrated trajectory."""
+    """Refine all transversal section crossings in an integrated trajectory.
+
+    Follows the reference implementation: detect sign change of the section
+    value, then linearly interpolate the crossing point (no brentq refinement).
+    """
     times = np.asarray(times, dtype=float)
     states = np.asarray(states, dtype=float)
     values = np.asarray([section_value(s, theta, state_fn) for s in states])
@@ -122,18 +126,8 @@ def find_crossings(
         if not hit:
             continue
         step = times[i + 1] - times[i]
-
-        def residual(tau: float) -> float:
-            return section_value(
-                flow(robot, states[i], times[i], tau, nsub=nsub),
-                theta,
-                state_fn,
-            )
-
-        try:
-            tau = brentq(residual, 0.0, step, xtol=1e-13, rtol=1e-13)
-        except ValueError:
-            tau = step * (-a) / (b - a)
+        # Linear interpolation of crossing time (reference implementation)
+        tau = step * (-a) / (b - a) if (b - a) != 0.0 else step * 0.5
         crossings.append(flow(robot, states[i], times[i], tau, nsub=nsub))
     return np.asarray(crossings, dtype=float)
 
@@ -178,6 +172,56 @@ def project_section(
     projection = np.array([template, e_z, normal])
     section_states = np.asarray([state_fn(s) for s in crossings])
     return section_states @ projection.T
+
+
+def create_poincare_section(
+    robot: SnakeboardRobot,
+    y0: np.ndarray,
+    t_transient: float = 500.0,
+    t_compute: float = 2000.0,
+    dt: float = 0.01,
+    plane_idx: int = O3_IDX,
+    threshold: float = 0.0,
+    direction: str = "positive",
+    nsub: int = 4,
+) -> np.ndarray:
+    """Poincare section following the reference implementation.
+
+    Integrates a transient, then a compute window, detects crossings of the
+    plane variable ``states[:, plane_idx]`` at ``threshold`` using linear
+    interpolation, and returns the crossing states projected onto the other
+    dimensions.
+    """
+    # --- Transient: settle onto attractor ----------------------------------
+    _, transient_states = simulate(robot, y0, t_transient, dt, nsub=nsub)
+    y_start = transient_states[-1].copy()
+
+    # --- Compute: sample attractor -----------------------------------------
+    _, states = simulate(robot, y_start, t_compute, dt, nsub=nsub)
+    plane_var = states[:, plane_idx]
+
+    crossings = []
+    for i in range(1, len(plane_var)):
+        a, b = plane_var[i - 1], plane_var[i]
+        if direction == "positive":
+            hit = (a < threshold) and (b >= threshold)
+        elif direction == "negative":
+            hit = (a > threshold) and (b <= threshold)
+        else:
+            hit = a * b < 0.0
+        if not hit:
+            continue
+        # Linear interpolation of crossing time (reference implementation)
+        if b - a != 0.0:
+            t_crossing = (threshold - a) / (b - a)
+        else:
+            t_crossing = 0.5
+        crossing_state = states[i - 1] + t_crossing * (states[i] - states[i - 1])
+        crossings.append(crossing_state)
+
+    if len(crossings) == 0:
+        return np.empty((0, states.shape[1]), dtype=float)
+    return np.asarray(crossings, dtype=float)
 
 
 def return_map(

@@ -17,7 +17,10 @@ from packages.sim import model_plant
 def _parse_args(argv=None):
     ap = argparse.ArgumentParser(description="Optimize the snakeboard gait (JINT/RAS)")
     ap.add_argument(
-        "--model", choices=("JINT", "RAS", "LORENZ", "ROSSLER"), default="JINT", help="snakeboard model or chaotic system"
+        "--model",
+        choices=("JINT", "RAS", "LORENZ", "ROSSLER"),
+        default="JINT",
+        help="snakeboard model or chaotic system",
     )
     ap.add_argument(
         "--controller",
@@ -297,10 +300,15 @@ def run(argv=None):
                 eps=args.lyapunov_eps,
             )
             print("Lyapunov exponents [bits/time]:")
+
             for body, exponent in zip(
                 lyapunov_result.bodies, lyapunov_result.body_exponents
             ):
                 print(f"  {body:<8s} {exponent: .4f}")
+            print(f" Full spectrum: {lyapunov_result.exponents}")
+            for idx, exponent in enumerate(lyapunov_result.exponents):
+                print(f"    mode {idx:<3d} {exponent: .4f}")
+
             print(f"Lyapunov dimension: {lyapunov_result.dimension:.4f}")
             print(f"Classification: {lyapunov_result.classification}")
         except (ValueError, np.linalg.LinAlgError) as exc:

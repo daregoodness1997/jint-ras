@@ -27,8 +27,14 @@ packages = [{include = "packages", from = "src"}]
 start = "packages.cli.base:main"
 jint = "packages.cli.jint:main"
 ras = "packages.cli.ras:main"
+sweep = "packages.cli.sweep:main"
 server = "server.main:run"
-snakeboard-server = "server.snakeboard:run"
+jacobian = "packages.dynamics.jacobian:main"
+poincare = "packages.dynamics.poincare:main"
+lyapunov = "packages.dynamics.lyapunov:main"
+bifurcate = "packages.dynamics.bifurcate:main"
+tune = "packages.dynamics.tune_generic:main"
+ras-model = "packages.models.ras:main"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
